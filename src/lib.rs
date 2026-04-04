@@ -23,18 +23,16 @@ use rushdown::ast::WalkStatus;
 use rushdown::matches_extension_kind;
 use rushdown::matches_kind;
 use rushdown::parser;
+use rushdown::parser::parser_extension;
 use rushdown::parser::AnyBlockParser;
 use rushdown::parser::BlockParser;
 use rushdown::parser::NoParserOptions;
-use rushdown::parser::Parser;
 use rushdown::parser::ParserExtension;
-use rushdown::parser::ParserExtensionFn;
 use rushdown::renderer;
 use rushdown::renderer::html;
+use rushdown::renderer::html::renderer_extension;
 use rushdown::renderer::html::ParagraphRendererOptions;
-use rushdown::renderer::html::Renderer;
 use rushdown::renderer::html::RendererExtension;
-use rushdown::renderer::html::RendererExtensionFn;
 use rushdown::renderer::BoxRenderNode;
 use rushdown::renderer::NoRendererOptions;
 use rushdown::renderer::NodeRenderer;
@@ -567,7 +565,7 @@ pub fn is_in_tight_list(arena: &ast::Arena, node_ref: ast::NodeRef) -> bool {
 
 /// Returns a parser extension that parses definition lists.
 pub fn definition_list_parser_extension() -> impl ParserExtension {
-    ParserExtensionFn::new(|p: &mut Parser| {
+    parser_extension(|p| {
         p.add_block_parser(DefinitionListParser::new, NoParserOptions, 101);
         p.add_block_parser(TermDefinitionParser::new, NoParserOptions, 102);
     })
@@ -578,12 +576,12 @@ pub fn definition_list_html_renderer_extension<'cb, W>() -> impl RendererExtensi
 where
     W: TextWrite + 'cb,
 {
-    RendererExtensionFn::new(move |r: &mut Renderer<'cb, W>| {
+    renderer_extension(move |r| {
         r.add_node_renderer(DefinitionListHtmlRenderer::new, NoRendererOptions);
         r.add_node_renderer(TermDefinitionHtmlRenderer::new, NoRendererOptions);
         r.add_node_renderer(TermHtmlRenderer::new, NoRendererOptions);
     })
-    .and(html::paragraph_renderer(ParagraphRendererOptions::<W> {
+    .and(html::paragraph_renderer(ParagraphRendererOptions {
         is_in_tight_block: Some(is_in_tight_list),
         ..Default::default()
     }))
