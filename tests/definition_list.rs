@@ -22,7 +22,7 @@ fn test_definition_list() {
         html::Options {
             allows_unsafe: true,
             xhtml: false,
-            ..html::Options::default()
+            ..Default::default()
         },
         definition_list_parser_extension(),
         definition_list_html_renderer_extension(),

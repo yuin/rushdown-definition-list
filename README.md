@@ -89,7 +89,7 @@ let markdown_to_html = new_markdown_to_html(
     definition_list_parser_extension(),
     definition_list_html_renderer_extension()
       .and(html::paragraph_renderer(html::ParagraphRendererOptions {
-        is_in_tight_block: Some(is_in_tight_list), // must use `is_in_tight_list` to avoid wrapping paragraphs in tight definition lists with <p> tags.
+        is_in_tight_block: Some(is_in_tight_list), // must use `is_in_tight_list` to avoid wrapping paragraphs in tight definition descriptions with <p> tags.
         ..Default::default() // you can set other options.
       }))
 

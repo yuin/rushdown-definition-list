@@ -14,6 +14,7 @@ use rushdown::as_type_data_mut;
 use rushdown::ast;
 use rushdown::ast::pp_indent;
 use rushdown::ast::Arena;
+use rushdown::ast::InlineChars;
 use rushdown::ast::KindData;
 use rushdown::ast::NodeKind;
 use rushdown::ast::NodeRef;
@@ -44,6 +45,7 @@ use rushdown::text::Reader;
 use rushdown::util::indent_position;
 use rushdown::util::indent_width;
 use rushdown::util::is_blank;
+use rushdown::util::AsciiWordSet;
 use rushdown::Result;
 
 // AST {{{
@@ -53,7 +55,6 @@ use rushdown::Result;
 pub struct DefinitionList {
     offset: u8,
     temp_paragraph: Option<NodeRef>,
-    is_tight: bool,
 }
 
 impl Default for DefinitionList {
@@ -68,7 +69,6 @@ impl DefinitionList {
         Self {
             offset: 0,
             temp_paragraph: None,
-            is_tight: true,
         }
     }
 
@@ -76,22 +76,11 @@ impl DefinitionList {
         Self {
             offset,
             temp_paragraph: Some(temp_paragraph),
-            is_tight: true,
         }
     }
-
-    /// Sets whether the definition list is tight or loose.
-    #[inline(always)]
-    pub fn set_tight(&mut self, tight: bool) {
-        self.is_tight = tight;
-    }
-
-    /// Returns whether the definition list is tight or loose.
-    #[inline(always)]
-    pub fn is_tight(&self) -> bool {
-        self.is_tight
-    }
 }
+
+impl InlineChars for DefinitionList {}
 
 impl NodeKind for DefinitionList {
     fn typ(&self) -> NodeType {
@@ -105,8 +94,7 @@ impl NodeKind for DefinitionList {
 
 impl PrettyPrint for DefinitionList {
     fn pretty_print(&self, w: &mut dyn Write, _source: &str, level: usize) -> fmt::Result {
-        writeln!(w, "{}IsTight: {}", pp_indent(level), self.is_tight)?;
-        Ok(())
+        writeln!(w, "{}Offset: {}", pp_indent(level), self.offset)
     }
 }
 
@@ -133,6 +121,8 @@ impl Term {
     }
 }
 
+impl InlineChars for Term {}
+
 impl NodeKind for Term {
     fn typ(&self) -> NodeType {
         NodeType::LeafBlock
@@ -157,7 +147,9 @@ impl From<Term> for KindData {
 
 /// Represents a term definition in the AST.
 #[derive(Debug)]
-pub struct TermDefinition {}
+pub struct TermDefinition {
+    is_tight: bool,
+}
 
 impl Default for TermDefinition {
     fn default() -> Self {
@@ -168,9 +160,17 @@ impl Default for TermDefinition {
 impl TermDefinition {
     /// Creates a new `TermDefinition`.
     pub fn new() -> Self {
-        Self {}
+        Self { is_tight: true }
+    }
+
+    /// Returns whether the term definition is tight or loose.
+    #[inline(always)]
+    pub fn is_tight(&self) -> bool {
+        self.is_tight
     }
 }
+
+impl InlineChars for TermDefinition {}
 
 impl NodeKind for TermDefinition {
     fn typ(&self) -> NodeType {
@@ -183,8 +183,8 @@ impl NodeKind for TermDefinition {
 }
 
 impl PrettyPrint for TermDefinition {
-    fn pretty_print(&self, _w: &mut dyn Write, _source: &str, _level: usize) -> fmt::Result {
-        Ok(())
+    fn pretty_print(&self, w: &mut dyn Write, _source: &str, level: usize) -> fmt::Result {
+        writeln!(w, "{}IsTight: {}", pp_indent(level), self.is_tight)
     }
 }
 
@@ -234,7 +234,7 @@ impl BlockParser for DefinitionListParser {
         if w < 1 {
             return None;
         }
-        if w > 8 {
+        if w >= 8 {
             // starts with indented code
             w = 5;
         }
@@ -383,17 +383,8 @@ impl BlockParser for TermDefinitionParser {
         _reader: &mut text::BasicReader,
         _ctx: &mut parser::Context,
     ) {
-        if as_type_data!(arena, node_ref, Block).has_blank_previous_line() {
-            let mut cur = node_ref;
-            while let Some(parent_ref) = arena[cur].parent() {
-                if matches_extension_kind!(arena, parent_ref, DefinitionList) {
-                    let kd = as_extension_data_mut!(arena, parent_ref, DefinitionList);
-                    kd.set_tight(false);
-                    break;
-                }
-                cur = parent_ref;
-            }
-        }
+        let is_tight = !as_type_data!(arena, node_ref, Block).has_blank_previous_line();
+        as_extension_data_mut!(arena, node_ref, TermDefinition).is_tight = is_tight;
     }
 
     fn can_interrupt_paragraph(&self) -> bool {
@@ -413,14 +404,14 @@ impl From<TermDefinitionParser> for AnyBlockParser {
 
 struct DefinitionListHtmlRenderer<W: TextWrite> {
     _phantom: core::marker::PhantomData<W>,
-    writer: html::Writer,
+    attr_filter: AsciiWordSet,
 }
 
 impl<W: TextWrite> DefinitionListHtmlRenderer<W> {
-    fn new(html_opts: html::Options) -> Self {
+    fn new() -> Self {
         Self {
             _phantom: core::marker::PhantomData,
-            writer: html::Writer::with_options(html_opts),
+            attr_filter: AsciiWordSet::new(html::DEFAULT_ATTRS),
         }
     }
 }
@@ -429,16 +420,23 @@ impl<W: TextWrite> RenderNode<W> for DefinitionListHtmlRenderer<W> {
     fn render_node<'a>(
         &self,
         w: &mut W,
-        _source: &'a str,
-        _arena: &'a Arena,
-        _node_ref: NodeRef,
+        source: &'a str,
+        arena: &'a Arena,
+        node_ref: NodeRef,
         entering: bool,
         _context: &mut renderer::Context,
     ) -> Result<WalkStatus> {
         if entering {
-            self.writer.write_safe_str(w, "<dl>\n")?
+            w.write_str("<dl")?;
+            html::render_attributes(
+                w,
+                source,
+                arena[node_ref].attributes(),
+                Some(&self.attr_filter),
+            )?;
+            w.write_str(">\n")?;
         } else {
-            self.writer.write_safe_str(w, "</dl>\n")?
+            w.write_str("</dl>\n")?;
         }
         Ok(WalkStatus::Continue)
     }
@@ -455,14 +453,14 @@ where
 
 struct TermHtmlRenderer<W: TextWrite> {
     _phantom: core::marker::PhantomData<W>,
-    writer: html::Writer,
+    attr_filter: AsciiWordSet,
 }
 
 impl<W: TextWrite> TermHtmlRenderer<W> {
-    fn new(html_opts: html::Options) -> Self {
+    fn new() -> Self {
         Self {
             _phantom: core::marker::PhantomData,
-            writer: html::Writer::with_options(html_opts),
+            attr_filter: AsciiWordSet::new(html::DEFAULT_ATTRS),
         }
     }
 }
@@ -471,16 +469,23 @@ impl<W: TextWrite> RenderNode<W> for TermHtmlRenderer<W> {
     fn render_node<'a>(
         &self,
         w: &mut W,
-        _source: &'a str,
-        _arena: &'a Arena,
-        _node_ref: NodeRef,
+        source: &'a str,
+        arena: &'a Arena,
+        node_ref: NodeRef,
         entering: bool,
         _context: &mut renderer::Context,
     ) -> Result<WalkStatus> {
         if entering {
-            self.writer.write_safe_str(w, "<dt>")?
+            w.write_str("<dt")?;
+            html::render_attributes(
+                w,
+                source,
+                arena[node_ref].attributes(),
+                Some(&self.attr_filter),
+            )?;
+            w.write_str(">")?;
         } else {
-            self.writer.write_safe_str(w, "</dt>\n")?
+            w.write_str("</dt>\n")?;
         }
         Ok(WalkStatus::Continue)
     }
@@ -497,14 +502,14 @@ where
 
 struct TermDefinitionHtmlRenderer<W: TextWrite> {
     _phantom: core::marker::PhantomData<W>,
-    writer: html::Writer,
+    attr_filter: AsciiWordSet,
 }
 
 impl<W: TextWrite> TermDefinitionHtmlRenderer<W> {
-    fn new(html_opts: html::Options) -> Self {
+    fn new() -> Self {
         Self {
             _phantom: core::marker::PhantomData,
-            writer: html::Writer::with_options(html_opts),
+            attr_filter: AsciiWordSet::new(html::DEFAULT_ATTRS),
         }
     }
 }
@@ -513,24 +518,28 @@ impl<W: TextWrite> RenderNode<W> for TermDefinitionHtmlRenderer<W> {
     fn render_node<'a>(
         &self,
         w: &mut W,
-        _source: &'a str,
+        source: &'a str,
         arena: &'a Arena,
         node_ref: NodeRef,
         entering: bool,
         _context: &mut renderer::Context,
     ) -> Result<WalkStatus> {
         if entering {
-            self.writer.write_safe_str(w, "<dd>")?;
-            if let Some(p) = arena[node_ref].parent() {
-                if matches_extension_kind!(arena, p, DefinitionList) {
-                    let kd = as_extension_data!(arena, p, DefinitionList);
-                    if !kd.is_tight() {
-                        self.writer.write_safe_str(w, "\n")?;
-                    }
-                }
+            let is_tight = as_extension_data!(arena, node_ref, TermDefinition).is_tight();
+            w.write_str("<dd")?;
+            html::render_attributes(
+                w,
+                source,
+                arena[node_ref].attributes(),
+                Some(&self.attr_filter),
+            )?;
+            if is_tight {
+                w.write_str(">")?;
+            } else {
+                w.write_str(">\n")?;
             }
         } else {
-            self.writer.write_safe_str(w, "</dd>\n")?
+            w.write_str("</dd>\n")?;
         }
         Ok(WalkStatus::Continue)
     }
@@ -545,15 +554,16 @@ where
     }
 }
 
-/// Returns true if the given node is a child of a tight list, otherwise false.
+/// Returns true if the given node is in a tight definition description, otherwise
+/// falls back to the default implementation.
 #[inline(always)]
 pub fn is_in_tight_list(arena: &ast::Arena, node_ref: ast::NodeRef) -> bool {
     if let Some(p) = arena[node_ref].parent() {
-        if let Some(gp) = arena[p].parent() {
-            if matches_extension_kind!(arena, gp, DefinitionList) {
-                let kd = as_extension_data!(arena, gp, DefinitionList);
-                return kd.is_tight();
-            }
+        if matches_extension_kind!(arena, p, TermDefinition) {
+            let desc = as_extension_data!(arena, p, TermDefinition);
+            let is_block = matches!(arena[node_ref].type_data(), ast::TypeData::Block(_));
+            return desc.is_tight()
+                && (!is_block || !as_type_data!(arena, node_ref, Block).has_blank_previous_line());
         }
     }
     html::is_in_tight_list(arena, node_ref)
